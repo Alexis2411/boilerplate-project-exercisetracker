@@ -6,15 +6,14 @@ const Schema = mongoose.Schema;
 const bodyParser = require("body-parser");
 require("dotenv").config();
 
-mongoose.connect(
-  process.env.URI,
-  { useNewUrlParser: true },
-  { useUnifiedTopology: true }
-);
+mongoose.connect(process.env.URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 
-//Schemas
-
-const excerciseEschema = new Schema({
+// Schemas
+const exerciseSchema = new Schema({
+  userId: { type: Schema.Types.ObjectId, ref: "User" },
   username: { type: String },
   description: { type: String },
   duration: { type: Number },
@@ -25,79 +24,132 @@ const userSchema = new Schema({
   username: { type: String },
 });
 
-const logSchema = new Schema({
-  username: { type: String },
-  count: { type: Number },
-  log: [
-    {
-      description: { type: String },
-      duration: { type: Number },
-      date: { type: Date },
-    },
-  ],
-});
-
-//Models
-const Excercise = mongoose.model("Excercise", excerciseEschema);
+// Models
+const Exercise = mongoose.model("Exercise", exerciseSchema);
 const User = mongoose.model("User", userSchema);
-const Log = mongoose.model("Log", logSchema);
 
+// Middleware
 app.use(cors());
 app.use(express.static("public"));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
+// POST route to create a new user
 app.post("/api/users", (req, res) => {
   const { username } = req.body;
   const newUser = new User({ username });
-  console.log(newUser);
   newUser
     .save()
-    .then(() => res.json(newUser))
-    .catch((err) => res.status(409).send(err));
-});
-
-app.post("/api/users/:_id/exercises", (req, res) => {
-  const id = req.params._id;
-  User.findById(id)
     .then((user) => {
-      if (!user) {
-        return res.status(404).send("No user with that ID");
-      }
-      const username = user.username.toLowerCase();
-      const description = req.body.description;
-      const duration = req.body.duration;
-      const date = new Date(req.body.date);
-      //Add exercise to users log and increment the count of exercises in database
-      const newLog = new Excercise({ username, description, duration, date });
-      newLog
-        .save()
-        .then(() => res.json(newLog))
-        .catch((e) => console.log(e));
+      res.status(201).json({ username: user.username, _id: user._id });
     })
-    .catch((err) => console.log(err));
+    .catch((err) => res.status(409).send(err.message));
 });
 
+// POST route to create a new exercise
+app.post("/api/users/:_id/exercises", (req, res) => {
+  const userId = req.params._id;
+  const { description, duration, date } = req.body;
+
+  User.findById(userId).then((user) => {
+    if (!user) {
+      return res.status(404).send("No user with that ID");
+    }
+
+    const newExercise = new Exercise({
+      userId: user._id,
+      username: user.username,
+      description: description,
+      duration: parseInt(duration),
+      date: date ? new Date(date) : new Date(),
+    });
+
+    newExercise
+      .save()
+      .then((exercise) =>
+        res.json({
+          username: user.username,
+          description: exercise.description,
+          duration: exercise.duration,
+          date: exercise.date.toDateString(),
+          _id: user._id,
+        }),
+      )
+      .catch((err) => {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      });
+  });
+});
+
+// GET route to retrieve all users
 app.get("/api/users", (req, res) => {
-  User.find({})
+  User.find()
     .then((users) => res.json(users))
     .catch((err) => {
-      console.log(err);
+      console.error(err);
+      res.status(500).send("Internal Server Error");
     });
 });
+
+// GET route to retrieve exercise logs for a specific user
+app.get("/api/users/:_id/logs", (req, res) => {
+  const userId = req.params._id;
+  const { from, to, limit } = req.query;
+
+  User.findById(userId).then((user) => {
+    if (!user) {
+      return res.status(404).send("No user with that ID");
+    }
+
+    let query = Exercise.find({ userId: user._id });
+
+    if (from) {
+      query.where("date").gte(new Date(from));
+    }
+    if (to) {
+      query.where("date").lte(new Date(to));
+    }
+
+    if (limit) {
+      query.limit(parseInt(limit));
+    }
+
+    query.exec().then((exercises) => {
+      const log = exercises.map((exercise) => ({
+        description: exercise.description,
+        duration: exercise.duration,
+        date: exercise.date.toDateString(),
+      }));
+
+      res.json({
+        username: user.username,
+        count: log.length,
+        _id: user._id,
+        log: log,
+      });
+    });
+  });
+});
+
+// Default route
 app.get("/", (req, res) => {
   res.sendFile(__dirname + "/views/index.html");
 });
 
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).send("Something went wrong.");
 });
 
+// 404 middleware
 app.use((req, res) => {
   res.status(404).send("Page not found.");
 });
 
-const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log("Your app is listening on port " + listener.address().port);
+// Server listening
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Your app is listening on port ${PORT}`);
 });
